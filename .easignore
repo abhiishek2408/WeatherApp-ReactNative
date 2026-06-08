@@ -1,9 +1,0 @@
-**/node_modules
-**/.git
-**/.expo
-**/.expo-shared
-.expo
-.expo-shared
-android/.gradle
-ios/Pods
-AppData/
