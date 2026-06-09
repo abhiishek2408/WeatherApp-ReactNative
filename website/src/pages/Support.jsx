@@ -31,7 +31,7 @@ function Support() {
       <p>Our algorithm takes into account the current "Feels Like" temperature, humidity, and wind speed in your location to recommend the most comfortable clothing. It categorizes weather into freezing, cold, mild, warm, and hot to give you tailored, practical advice on what to wear before you step outside.</p>
 
       <h3>4. Can I search for weather in multiple cities?</h3>
-      <p>Yes! In the Global AQI Explorer section, you can browse through various continents and countries to find specific cities. We are also working on adding a direct search bar in the upcoming v2.1 update.</p>
+      <p>Yes! In the Global AQI Explorer section, you can browse through various continents and countries to find specific cities. We are also working on adding a direct search bar in the upcoming v1.1 update.</p>
 
       <h3>5. How do I enable the Minimalist Theme?</h3>
       <p>Open the Settings menu by clicking the icon in the top right corner. Toggle the "Minimalist Theme" switch. This will activate a cleaner, distraction-free solid color interface instead of the default glassmorphic transparent background.</p>

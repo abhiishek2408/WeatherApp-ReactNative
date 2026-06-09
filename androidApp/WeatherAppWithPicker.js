@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -13,7 +13,6 @@ import {
   StatusBar,
   ScrollView,
   TextInput,
-  Animated,
   RefreshControl,
   Keyboard,
   Image,
@@ -23,14 +22,20 @@ import {
   Share,
   Linking,
   BackHandler,
+  InteractionManager,
 } from 'react-native';
+import { WEATHER_API_KEY } from '@env';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { useQuery } from '@tanstack/react-query';
 import Geolocation from 'react-native-geolocation-service';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Icon from 'react-native-vector-icons/Ionicons';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
+import FastImage from 'react-native-fast-image';
 import MaskedView from '@react-native-masked-view/masked-view';
 import LinearGradient from 'react-native-linear-gradient';
+import Animated, { useSharedValue, useAnimatedStyle, withTiming, withSpring, withRepeat, withSequence, withDelay, interpolate } from 'react-native-reanimated';
+import Svg, { Path } from 'react-native-svg';
 
 const translations = {
   en: {
@@ -125,77 +130,68 @@ const translations = {
   }
 };
 
-const WeatherParticles = ({ condition }) => {
+const Particle = ({ startX, startY, endY, speed, delay, opacity, drift, isSnow }) => {
+  const progress = useSharedValue(0);
+
+  useEffect(() => {
+    progress.value = withDelay(delay, withRepeat(withTiming(1, { duration: speed }), -1, false));
+  }, []);
+
+  const animatedStyle = useAnimatedStyle(() => {
+    const translateY = interpolate(progress.value, [0, 1], [startY, endY]);
+    const translateX = interpolate(progress.value, [0, 1], [startX, startX + drift]);
+    return {
+      transform: [{ translateX }, { translateY }, { rotate: isSnow ? '0deg' : '15deg' }]
+    };
+  });
+
+  return (
+    <Animated.View
+      style={[{
+        position: 'absolute',
+        left: 0,
+        top: 0,
+        width: isSnow ? (Math.random() * 4 + 4) : (Math.random() * 1 + 1),
+        height: isSnow ? (Math.random() * 4 + 4) : (Math.random() * 15 + 10),
+        backgroundColor: `rgba(255, 255, 255, ${opacity})`,
+        borderRadius: isSnow ? 5 : 1,
+      }, animatedStyle]}
+    />
+  );
+};
+
+const WeatherParticles = React.memo(({ condition }) => {
   if (condition !== 'Rain' && condition !== 'Snow' && condition !== 'Drizzle') return null;
   const isSnow = condition === 'Snow';
   const numParticles = isSnow ? 50 : 80;
   
   const particles = Array.from({ length: numParticles }).map((_, i) => {
-    const startX = Math.random() * 600 - 100; // Allow drift from outside screen
+    const startX = Math.random() * 600 - 100;
     const startY = Math.random() * -1000 - 100;
     const endY = startY + 1500;
-    const animY = useRef(new Animated.Value(0)).current;
-    const animX = useRef(new Animated.Value(0)).current;
     const speed = Math.random() * 1500 + (isSnow ? 3000 : 800);
     const delay = Math.random() * 2000;
     const opacity = Math.random() * 0.5 + 0.3;
     const drift = isSnow ? (Math.random() * 200 - 100) : (Math.random() * 50 - 25);
-
-    useEffect(() => {
-      Animated.loop(
-        Animated.parallel([
-          Animated.timing(animY, {
-            toValue: 1,
-            duration: speed,
-            delay: delay,
-            useNativeDriver: true,
-          }),
-          Animated.timing(animX, {
-            toValue: 1,
-            duration: speed,
-            delay: delay,
-            useNativeDriver: true,
-          })
-        ])
-      ).start();
-    }, []);
-
-    const translateY = animY.interpolate({ inputRange: [0, 1], outputRange: [startY, endY] });
-    const translateX = animX.interpolate({ inputRange: [0, 1], outputRange: [startX, startX + drift] });
-    
-    return (
-      <Animated.View
-        key={i}
-        style={{
-          position: 'absolute',
-          left: 0,
-          top: 0,
-          width: isSnow ? (Math.random() * 4 + 4) : (Math.random() * 1 + 1),
-          height: isSnow ? (Math.random() * 4 + 4) : (Math.random() * 15 + 10),
-          backgroundColor: `rgba(255, 255, 255, ${opacity})`,
-          borderRadius: isSnow ? 5 : 1,
-          transform: [{ translateX }, { translateY }, { rotate: isSnow ? '0deg' : '15deg' }],
-        }}
-      />
-    );
+    return <Particle key={i} startX={startX} startY={startY} endY={endY} speed={speed} delay={delay} opacity={opacity} drift={drift} isSnow={isSnow} />;
   });
 
   return <View style={StyleSheet.absoluteFill} pointerEvents="none">{particles}</View>;
-};
+});
 
-const ThunderAnimation = ({ condition }) => {
+const ThunderAnimation = React.memo(({ condition }) => {
   if (condition !== 'Thunderstorm') return null;
-  const flashAnim = useRef(new Animated.Value(0)).current;
+  const flashAnim = useSharedValue(0);
 
   useEffect(() => {
     let timeoutId;
     const triggerFlash = () => {
-      Animated.sequence([
-        Animated.timing(flashAnim, { toValue: 1, duration: 50, useNativeDriver: true }),
-        Animated.timing(flashAnim, { toValue: 0.2, duration: 50, useNativeDriver: true }),
-        Animated.timing(flashAnim, { toValue: 0.8, duration: 50, useNativeDriver: true }),
-        Animated.timing(flashAnim, { toValue: 0, duration: 300, useNativeDriver: true }),
-      ]).start();
+      flashAnim.value = withSequence(
+        withTiming(1, { duration: 50 }),
+        withTiming(0.2, { duration: 50 }),
+        withTiming(0.8, { duration: 50 }),
+        withTiming(0, { duration: 300 })
+      );
       
       const nextFlash = Math.random() * 8000 + 3000;
       timeoutId = setTimeout(triggerFlash, nextFlash);
@@ -205,16 +201,23 @@ const ThunderAnimation = ({ condition }) => {
     return () => clearTimeout(timeoutId);
   }, []);
 
+  const animatedStyle = useAnimatedStyle(() => {
+    return {
+      opacity: flashAnim.value
+    };
+  });
+
   return (
     <Animated.View 
       style={[
         StyleSheet.absoluteFill, 
-        { backgroundColor: 'white', opacity: flashAnim }
+        { backgroundColor: 'white' },
+        animatedStyle
       ]} 
       pointerEvents="none" 
     />
   );
-};
+});
 
 const triviaQuestions = [
   { q: "What is the hottest planet in our solar system?", options: ["Venus", "Mars", "Mercury", "Jupiter"], a: "Venus" },
@@ -268,18 +271,99 @@ const globalAqiLocations = {
   }
 };
 
+const formatForecastTime = (dt_txt) => {
+  const date = new Date(dt_txt);
+  let hours = date.getHours();
+  const ampm = hours >= 12 ? 'PM' : 'AM';
+  hours = hours % 12;
+  hours = hours ? hours : 12;
+  return `${hours} ${ampm}`;
+};
+
+const getDayName = (dateString, index) => {
+  if (index === 0) return 'Today';
+  const date = new Date(dateString);
+  return date.toLocaleDateString('en-US', { weekday: 'short' });
+};
+
+const HourlyForecastItem = React.memo(({ item }) => {
+  let iconName = 'sunny';
+  const condition = item.weather[0].main;
+  if (condition === 'Clouds') iconName = 'partly-sunny';
+  else if (condition === 'Rain' || condition === 'Drizzle') iconName = 'rainy';
+  else if (condition === 'Thunderstorm') iconName = 'thunderstorm';
+  else if (condition === 'Snow') iconName = 'snow';
+
+  return (
+    <View style={styles.hourlyItem}>
+      <Icon name={iconName} size={32} color={iconName === 'sunny' ? '#FDB813' : 'rgba(255,255,255,0.8)'} />
+      <Text style={styles.hourlyTime}>{formatForecastTime(item.dt_txt)}</Text>
+      <View style={{marginTop: 4, position: 'relative', alignItems: 'center'}}>
+        <Text style={styles.hourlyTemp}>{Math.round(item.main.temp)}</Text>
+        <Text style={{fontSize: 10, color: '#ffffff', position: 'absolute', right: -10, top: 0}}>°</Text>
+      </View>
+    </View>
+  );
+});
+
+const DailyForecastItem = React.memo(({ item, index }) => {
+  let iconName = 'sunny-outline';
+  const condition = item.weather.main;
+  if (condition === 'Clouds') iconName = 'partly-sunny-outline';
+  else if (condition === 'Rain' || condition === 'Drizzle') iconName = 'rainy-outline';
+  else if (condition === 'Thunderstorm') iconName = 'thunderstorm-outline';
+  else if (condition === 'Snow') iconName = 'snow-outline';
+
+  return (
+    <View style={styles.aestheticDailyRow}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+        <Text style={styles.aestheticDailyDay}>{getDayName(item.date, index)}</Text>
+        <Icon name={iconName} size={24} color="#ffffff" style={{ width: 30, textAlign: 'center', marginLeft: 10 }} />
+        <Text style={styles.aestheticDailyConditionText}>{condition}</Text>
+      </View>
+
+      <View style={styles.aestheticDailyTempRange}>
+        <Text style={styles.aestheticDailyTempMax}>{Math.round(item.max)}°</Text>
+        <Text style={styles.aestheticDailyTempMin}>{Math.round(item.min)}°</Text>
+      </View>
+    </View>
+  );
+});
+
+const SuggestionItem = React.memo(({ item, onPress }) => {
+  const handlePress = useCallback(() => onPress(item), [item, onPress]);
+  return (
+    <TouchableOpacity style={styles.suggestionItem} onPress={handlePress}>
+      <Text style={styles.suggestionText}>
+        {item.name}{item.state ? `, ${item.state}` : ''}, {item.country}
+      </Text>
+    </TouchableOpacity>
+  );
+});
+
+const FavoriteChip = React.memo(({ city, onCityPress, onCityLongPress }) => {
+  const handlePress = useCallback(() => onCityPress(city), [city, onCityPress]);
+  const handleLongPress = useCallback(() => onCityLongPress(city), [city, onCityLongPress]);
+  
+  return (
+    <TouchableOpacity 
+      style={styles.favoriteChip}
+      onPress={handlePress}
+      onLongPress={handleLongPress}
+    >
+      <Text style={styles.favoriteChipText}>⭐ {city}</Text>
+    </TouchableOpacity>
+  );
+});
+
 export default function WeatherAppWithLocation() {
   const navigation = useNavigation();
-  const [weatherData, setWeatherData] = useState(null);
-  const [forecastData, setForecastData] = useState(null);
-  const [dailyForecast, setDailyForecast] = useState([]);
-  const [aqi, setAqi] = useState(null);
+  const [activeQueryParam, setActiveQueryParam] = useState(null);
   const [trivia, setTrivia] = useState('');
   const [unit, setUnit] = useState('metric');
   const [language, setLanguage] = useState('en');
   const [theme, setTheme] = useState('dynamic');
   const [settingsVisible, setSettingsVisible] = useState(false);
-  const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [streak, setStreak] = useState(0);
 
@@ -301,14 +385,26 @@ export default function WeatherAppWithLocation() {
   const [bottomCardVisible, setBottomCardVisible] = useState(false);
   
   // Animation values
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(50)).current;
+  const fadeAnim = useSharedValue(0);
+  const slideAnim = useSharedValue(50);
 
-  const apiKey = '9b01d0c4095bf19142e51ddf0896e386';
+  const mainAnimatedStyle = useAnimatedStyle(() => {
+    return {
+      opacity: fadeAnim.value,
+      transform: [{ translateY: slideAnim.value }]
+    };
+  });
 
-  useEffect(() => {
-    loadInitialData();
-  }, []);
+  const apiKey = WEATHER_API_KEY;
+
+  useFocusEffect(
+    useCallback(() => {
+      const task = InteractionManager.runAfterInteractions(() => {
+        loadInitialData();
+      });
+      return () => task.cancel();
+    }, [])
+  );
 
   useEffect(() => {
     const backAction = () => {
@@ -324,8 +420,8 @@ export default function WeatherAppWithLocation() {
         setBottomCardVisible(false);
         return true;
       }
-      if (weatherData) {
-        setWeatherData(null);
+      if (activeQueryParam) {
+        setActiveQueryParam(null);
         return true;
       }
       return false;
@@ -333,7 +429,7 @@ export default function WeatherAppWithLocation() {
 
     const backHandler = BackHandler.addEventListener('hardwareBackPress', backAction);
     return () => backHandler.remove();
-  }, [weatherData, aqiExplorerVisible, settingsVisible, bottomCardVisible]);
+  }, [activeQueryParam, aqiExplorerVisible, settingsVisible, bottomCardVisible]);
 
   useFocusEffect(
     useCallback(() => {
@@ -401,13 +497,6 @@ export default function WeatherAppWithLocation() {
         setStreak(newStreak);
       }
       
-      const savedWeather = await AsyncStorage.getItem('@weatherData');
-      const savedForecast = await AsyncStorage.getItem('@forecastData');
-      
-      // We still want to parse them if we need them in the future, 
-      // but to ensure the search screen opens first, we will NOT set weatherData here automatically.
-      // The user must search or pick a favorite to view the weather.
-
       const savedTriviaScore = await AsyncStorage.getItem('@trivia_score');
       if (savedTriviaScore) setTriviaScore(parseInt(savedTriviaScore));
 
@@ -441,43 +530,14 @@ export default function WeatherAppWithLocation() {
     await AsyncStorage.setItem('@last_trivia_date', new Date().toDateString());
   };
 
-  const processDailyForecast = (list) => {
-    const dailyMap = {};
-    list.forEach(item => {
-      const date = item.dt_txt.split(' ')[0]; 
-      if (!dailyMap[date]) {
-        dailyMap[date] = { min: item.main.temp_min, max: item.main.temp_max, weather: item.weather[0] };
-      } else {
-        dailyMap[date].min = Math.min(dailyMap[date].min, item.main.temp_min);
-        dailyMap[date].max = Math.max(dailyMap[date].max, item.main.temp_max);
-      }
-    });
-    
-    const dailyArray = Object.keys(dailyMap).map(date => ({
-      date,
-      ...dailyMap[date]
-    })).slice(0, 5);
-    
-    setDailyForecast(dailyArray);
-  };
-
-  const getDayName = (dateString, index) => {
-    if (index === 0) return 'Today';
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-US', { weekday: 'short' });
-  };
-
   const toggleUnit = async () => {
     Vibration.vibrate(40);
     const newUnit = unit === 'metric' ? 'imperial' : 'metric';
     setUnit(newUnit);
     await AsyncStorage.setItem('@unit', newUnit);
-    if (weatherData) {
-      fetchWeather(`lat=${weatherData.coord.lat}&lon=${weatherData.coord.lon}`, true, newUnit);
-    }
   };
 
-  const toggleFavorite = async () => {
+  const toggleFavorite = useCallback(async () => {
     Vibration.vibrate(40);
     if (!weatherData) return;
     const cityName = weatherData.name;
@@ -497,9 +557,9 @@ export default function WeatherAppWithLocation() {
     } catch (e) {
       console.error('Failed to save favorite', e);
     }
-  };
+  }, [favorites, weatherData]);
 
-  const removeFavorite = async (cityName) => {
+  const removeFavorite = useCallback(async (cityName) => {
     try {
       const newFavs = favorites.filter(f => f !== cityName);
       setFavorites(newFavs);
@@ -507,7 +567,7 @@ export default function WeatherAppWithLocation() {
     } catch (e) {
       console.error('Failed to remove favorite', e);
     }
-  };
+  }, [favorites]);
 
   useEffect(() => {
     const fetchSuggestions = async () => {
@@ -550,6 +610,84 @@ export default function WeatherAppWithLocation() {
     return false;
   };
 
+  const { data: weatherQueryData, isFetching: loading, refetch: manualRefetch, error: queryError } = useQuery({
+    queryKey: ['weather', activeQueryParam, unit, language],
+    queryFn: async () => {
+      const weatherUrl = `https://api.openweathermap.org/data/2.5/weather?${activeQueryParam}&appid=${apiKey}&units=${unit}&lang=${language}`;
+      const forecastUrl = `https://api.openweathermap.org/data/2.5/forecast?${activeQueryParam}&appid=${apiKey}&units=${unit}&lang=${language}`;
+      
+      const [weatherRes, forecastRes] = await Promise.all([
+        fetch(weatherUrl),
+        fetch(forecastUrl)
+      ]);
+      const wData = await weatherRes.json();
+      const fData = await forecastRes.json();
+      
+      if (wData.cod !== 200) throw new Error(wData.message || 'Failed to fetch weather data');
+
+      let aqiDataVal = null;
+      try {
+        const aqiUrl = `https://api.openweathermap.org/data/2.5/air_pollution?lat=${wData.coord.lat}&lon=${wData.coord.lon}&appid=${apiKey}`;
+        const aqiRes = await fetch(aqiUrl);
+        const aqiData = await aqiRes.json();
+        if (aqiData.list && aqiData.list.length > 0) aqiDataVal = aqiData.list[0].main.aqi;
+      } catch(e) {}
+
+      const dailyMap = {};
+      if (fData.cod === "200") {
+        fData.list.forEach(item => {
+          const date = item.dt_txt.split(' ')[0]; 
+          if (!dailyMap[date]) {
+            dailyMap[date] = { min: item.main.temp_min, max: item.main.temp_max, weather: item.weather[0] };
+          } else {
+            dailyMap[date].min = Math.min(dailyMap[date].min, item.main.temp_min);
+            dailyMap[date].max = Math.max(dailyMap[date].max, item.main.temp_max);
+          }
+        });
+      }
+      const dailyArray = Object.keys(dailyMap).map(date => ({ date, ...dailyMap[date] })).slice(0, 5);
+
+      return {
+        weatherData: wData,
+        forecastData: fData.list ? fData.list.slice(0, 8) : [],
+        dailyForecast: dailyArray,
+        aqi: aqiDataVal
+      };
+    },
+    enabled: !!activeQueryParam,
+    staleTime: 1000 * 60 * 10,
+  });
+
+  const weatherData = weatherQueryData?.weatherData || null;
+  const forecastData = weatherQueryData?.forecastData || null;
+  const dailyForecast = weatherQueryData?.dailyForecast || [];
+  const aqi = weatherQueryData?.aqi || null;
+
+  useEffect(() => {
+    if (weatherQueryData && activeQueryParam) {
+      fadeAnim.value = withTiming(1, { duration: 600 });
+      slideAnim.value = withSpring(0, { damping: 10, stiffness: 40 });
+      
+      const triviaList = [
+        "A bolt of lightning is five times hotter than the surface of the sun.",
+        "The fastest falling raindrop travels at about 18 mph.",
+        "A hurricane releases the energy of 10 atomic bombs every second.",
+        "Snow is not actually white; it's clear and reflects light.",
+        "The wettest place on Earth is Mawsynram, India.",
+        "A cubic mile of ordinary fog contains less than a gallon of water.",
+        "Crickets can tell you the temperature! Count their chirps."
+      ];
+      setTrivia(triviaList[Math.floor(Math.random() * triviaList.length)]);
+    }
+  }, [weatherQueryData, activeQueryParam]);
+
+  useEffect(() => {
+    if (queryError) {
+      Alert.alert('Error', queryError.message || 'Failed to fetch weather data');
+      setActiveQueryParam(null);
+    }
+  }, [queryError]);
+
   const fetchWeatherByLocation = async () => {
     try {
       const hasPermission = await requestLocationPermission();
@@ -557,7 +695,6 @@ export default function WeatherAppWithLocation() {
         Alert.alert('Permission Denied', 'Location access is required.');
         return;
       }
-      setLoading(true);
       Geolocation.getCurrentPosition(
         (position) => {
           const { latitude, longitude } = position.coords;
@@ -565,101 +702,31 @@ export default function WeatherAppWithLocation() {
         },
         (error) => {
           Alert.alert('Location Error', error.message || 'Failed to get location');
-          setLoading(false);
         },
         { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 }
       );
     } catch (error) {
       Alert.alert('Error', 'Failed to request location permission');
-      setLoading(false);
     }
   };
 
-  const fetchWeather = async (queryParam, isRefresh = false, overrideUnit = unit, overrideLang = language) => {
-    if (!isRefresh) {
-      setLoading(true);
-      setWeatherData(null);
-      setForecastData(null);
-      setDailyForecast([]);
-      setAqi(null);
-      fadeAnim.setValue(0);
-      slideAnim.setValue(50);
-    }
+  const fetchWeather = (queryParam, isRefresh = false) => {
     Keyboard.dismiss();
     setSuggestions([]);
-
-    try {
-      const weatherUrl = `https://api.openweathermap.org/data/2.5/weather?${queryParam}&appid=${apiKey}&units=${overrideUnit}&lang=${overrideLang}`;
-      const forecastUrl = `https://api.openweathermap.org/data/2.5/forecast?${queryParam}&appid=${apiKey}&units=${overrideUnit}&lang=${overrideLang}`;
-      
-      const [weatherRes, forecastRes] = await Promise.all([
-        fetch(weatherUrl),
-        fetch(forecastUrl)
-      ]);
-      
-      const wData = await weatherRes.json();
-      const fData = await forecastRes.json();
-
-      if (wData.cod === 200) {
-        setRefreshing(false);
-        if (fData.cod === "200") {
-          setForecastData(fData.list.slice(0, 8)); // Next 24 hours (8 periods of 3 hours)
-          processDailyForecast(fData.list);
-        }
-        
-        try {
-          const aqiUrl = `https://api.openweathermap.org/data/2.5/air_pollution?lat=${wData.coord.lat}&lon=${wData.coord.lon}&appid=${apiKey}`;
-          const aqiRes = await fetch(aqiUrl);
-          const aqiData = await aqiRes.json();
-          if (aqiData.list && aqiData.list.length > 0) {
-            setAqi(aqiData.list[0].main.aqi);
-          }
-        } catch (e) { console.log('Failed to fetch AQI'); }
-
-        const triviaList = [
-          "A bolt of lightning is five times hotter than the surface of the sun.",
-          "The fastest falling raindrop travels at about 18 mph.",
-          "A hurricane releases the energy of 10 atomic bombs every second.",
-          "Snow is not actually white; it's clear and reflects light.",
-          "The wettest place on Earth is Mawsynram, India.",
-          "A cubic mile of ordinary fog contains less than a gallon of water.",
-          "Crickets can tell you the temperature! Count their chirps."
-        ];
-        setTrivia(triviaList[Math.floor(Math.random() * triviaList.length)]);
-        
-        await AsyncStorage.setItem('@weatherData', JSON.stringify(wData));
-        await AsyncStorage.setItem('@forecastData', JSON.stringify(fData));
-        setWeatherData(wData);
-        
-        Animated.parallel([
-          Animated.timing(fadeAnim, {
-            toValue: 1,
-            duration: 600,
-            useNativeDriver: true,
-          }),
-          Animated.spring(slideAnim, {
-            toValue: 0,
-            friction: 8,
-            tension: 40,
-            useNativeDriver: true,
-          })
-        ]).start();
-
-      } else {
-        Alert.alert('Error', wData.message || 'Failed to fetch weather data');
-      }
-    } catch (error) {
-      Alert.alert('Network Error', 'Failed to fetch weather data');
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
+    if (!isRefresh) {
+      fadeAnim.value = 0;
+      slideAnim.value = 50;
+    }
+    setActiveQueryParam(queryParam);
+    if (isRefresh && activeQueryParam === queryParam) {
+      manualRefetch();
     }
   };
 
   const onRefresh = () => {
-    if (weatherData) {
+    if (weatherData && activeQueryParam) {
       setRefreshing(true);
-      fetchWeather(`lat=${weatherData.coord.lat}&lon=${weatherData.coord.lon}`, true);
+      manualRefetch().finally(() => setRefreshing(false));
     }
   };
 
@@ -692,15 +759,6 @@ export default function WeatherAppWithLocation() {
     hours = hours ? hours : 12; // the hour '0' should be '12'
     const strMinutes = minutes < 10 ? '0' + minutes : minutes;
     return `${hours}:${strMinutes} ${ampm}`;
-  };
-
-  const formatForecastTime = (dt_txt) => {
-    const date = new Date(dt_txt);
-    let hours = date.getHours();
-    const ampm = hours >= 12 ? 'PM' : 'AM';
-    hours = hours % 12;
-    hours = hours ? hours : 12;
-    return `${hours} ${ampm}`;
   };
 
   const getBackgroundImage = (condition) => {
@@ -834,7 +892,7 @@ export default function WeatherAppWithLocation() {
     }
   };
 
-  const shareWeather = async () => {
+  const shareWeather = useCallback(async () => {
     if (!weatherData) return;
     try {
       const message = `Currently in ${weatherData.name}: ${Math.round(weatherData.main.temp)}°${unit === 'metric' ? 'C' : 'F'}, ${weatherData.weather[0].description}. ${translations[language].streak}: ${streak} via Atmosync!`;
@@ -842,22 +900,53 @@ export default function WeatherAppWithLocation() {
     } catch (error) {
       console.log(error.message);
     }
-  };
+  }, [weatherData, unit, language, streak]);
 
-  const openRadar = () => {
+  const openRadar = useCallback(() => {
     if (weatherData) {
       Linking.openURL(`https://openweathermap.org/weathermap?basemap=map&cities=true&layer=radar&lat=${weatherData.coord.lat}&lon=${weatherData.coord.lon}&zoom=10`);
     }
-  };
+  }, [weatherData]);
 
   const weatherCondition = weatherData?.weather[0]?.main;
-  const bgImage = weatherData ? getBackgroundImage(weatherCondition) : require('./assets/aesthetic_bg.png');
-  const isFavorite = weatherData ? favorites.includes(weatherData.name) : false;
+  const bgImage = useMemo(() => {
+    return weatherData ? getBackgroundImage(weatherCondition) : require('./assets/aesthetic_bg.webp');
+  }, [weatherData, weatherCondition]);
+  
+  const isFavorite = useMemo(() => {
+    return weatherData ? favorites.includes(weatherData.name) : false;
+  }, [weatherData, favorites]);
+
+  const handleSettingsOpen = useCallback(() => setSettingsVisible(true), []);
+  const handleSettingsClose = useCallback(() => setSettingsVisible(false), []);
+  const handleSearchSubmit = useCallback(() => {
+    if(searchQuery.trim()) fetchWeather(`q=${searchQuery}`);
+  }, [searchQuery, fetchWeather]);
+
+  const handleSuggestionPress = useCallback((item) => {
+    setSearchQuery(item.name);
+    fetchWeather(`lat=${item.lat}&lon=${item.lon}`);
+  }, [fetchWeather]);
+
+  const handleFavoritePress = useCallback((city) => {
+    fetchWeather(`q=${city}`);
+  }, [fetchWeather]);
+
+  const handleFavoriteLongPress = useCallback((city) => {
+    Alert.alert(
+      "Unsave City",
+      `Are you sure you want to remove ${city} from your saved cities?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Unsave", onPress: () => removeFavorite(city), style: 'destructive' }
+      ]
+    );
+  }, [removeFavorite]);
 
   return (
     <View style={styles.container}>
       {theme === 'dynamic' ? (
-        <ImageBackground source={bgImage} style={StyleSheet.absoluteFill} resizeMode="cover" />
+        <FastImage source={bgImage} style={StyleSheet.absoluteFill} resizeMode={FastImage.resizeMode.cover} />
       ) : (
         <View style={[StyleSheet.absoluteFill, { backgroundColor: '#121212' }]} />
       )}
@@ -867,7 +956,7 @@ export default function WeatherAppWithLocation() {
       <SafeAreaView style={styles.overlay}>
         {!weatherData && (
           <View style={{ position: 'absolute', top: Platform.OS === 'android' ? 50 : 45, right: 25, zIndex: 100 }}>
-            <TouchableOpacity onPress={() => setSettingsVisible(true)} style={styles.hamburgerIcon}>
+            <TouchableOpacity onPress={handleSettingsOpen} style={styles.hamburgerIcon}>
               <View style={styles.hamburgerLine} />
               <View style={styles.hamburgerLine} />
             </TouchableOpacity>
@@ -898,9 +987,7 @@ export default function WeatherAppWithLocation() {
                   onChangeText={setSearchQuery}
                   autoCorrect={false}
                 />
-                <TouchableOpacity style={styles.searchButton} onPress={() => {
-                  if(searchQuery.trim()) fetchWeather(`q=${searchQuery}`);
-                }}>
+                <TouchableOpacity style={styles.searchButton} onPress={handleSearchSubmit}>
                   <Icon name="search" size={20} color="#fff" style={styles.searchIcon} />
                 </TouchableOpacity>
               </View>
@@ -908,18 +995,7 @@ export default function WeatherAppWithLocation() {
               {suggestions.length > 0 && (
                 <View style={styles.suggestionsContainer}>
                   {suggestions.map((item, index) => (
-                    <TouchableOpacity 
-                      key={index} 
-                      style={styles.suggestionItem}
-                      onPress={() => {
-                        setSearchQuery(item.name);
-                        fetchWeather(`lat=${item.lat}&lon=${item.lon}`);
-                      }}
-                    >
-                      <Text style={styles.suggestionText}>
-                        {item.name}{item.state ? `, ${item.state}` : ''}, {item.country}
-                      </Text>
-                    </TouchableOpacity>
+                    <SuggestionItem key={index} item={item} onPress={handleSuggestionPress} />
                   ))}
                 </View>
               )}
@@ -927,27 +1003,19 @@ export default function WeatherAppWithLocation() {
               {favorites.length > 0 && (
                 <View style={styles.favoritesContainer}>
                   <Text style={styles.favoritesTitle}>{translations[language].savedCities}</Text>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                    {favorites.map((city, index) => (
-                      <TouchableOpacity 
-                        key={index} 
-                        style={styles.favoriteChip}
-                        onPress={() => fetchWeather(`q=${city}`)}
-                        onLongPress={() => {
-                          Alert.alert(
-                            "Unsave City",
-                            `Are you sure you want to remove ${city} from your saved cities?`,
-                            [
-                              { text: "Cancel", style: "cancel" },
-                              { text: "Unsave", onPress: () => removeFavorite(city), style: 'destructive' }
-                            ]
-                          );
-                        }}
-                      >
-                        <Text style={styles.favoriteChipText}>⭐ {city}</Text>
-                      </TouchableOpacity>
-                    ))}
-                  </ScrollView>
+                  <FlatList
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    data={favorites}
+                    keyExtractor={(item, index) => index.toString()}
+                    renderItem={({ item: city }) => (
+                      <FavoriteChip 
+                        city={city} 
+                        onCityPress={handleFavoritePress} 
+                        onCityLongPress={handleFavoriteLongPress} 
+                      />
+                    )}
+                  />
                 </View>
               )}
 
@@ -966,14 +1034,11 @@ export default function WeatherAppWithLocation() {
             <TouchableOpacity activeOpacity={1} onPress={() => setBottomCardVisible(!bottomCardVisible)} style={{flex: 1}}>
               <Animated.View style={[
                 styles.aestheticWeatherContainer,
-                { 
-                  opacity: fadeAnim, 
-                  transform: [{ translateY: slideAnim }] 
-                }
+                mainAnimatedStyle
               ]}>
                 <View style={styles.aestheticHeader}>
                 <View style={styles.aestheticLocationRow}>
-                  <TouchableOpacity onPress={() => setWeatherData(null)} style={{ padding: 5, marginRight: 5, marginLeft: -15 }}>
+                  <TouchableOpacity onPress={() => setActiveQueryParam(null)} style={{ padding: 5, marginRight: 5, marginLeft: -15 }}>
                     <Icon name="chevron-back" size={28} color="#ffffff" />
                   </TouchableOpacity>
                   <Icon name="location-sharp" size={16} color="#ffffff" style={{marginTop: 2}} />
@@ -1025,16 +1090,9 @@ export default function WeatherAppWithLocation() {
                     </View>
                   </MaskedView>
                   <TouchableOpacity onPress={toggleFavorite} activeOpacity={0.7} style={{marginLeft: -25, marginTop: 120, width: 22, height: 22}}>
-                    <Image 
-                      source={{ uri: 'https://img.icons8.com/ios-filled/100/ffffff/bookmark-ribbon.png' }} 
-                      style={[{ width: 22, height: 22, opacity: isFavorite ? 1 : 0, position: 'absolute' }]} 
-                      resizeMode="contain"
-                    />
-                    <Image 
-                      source={{ uri: 'https://img.icons8.com/ios/100/ffffff/bookmark-ribbon--v1.png' }} 
-                      style={[{ width: 22, height: 22, opacity: isFavorite ? 0 : 1, position: 'absolute' }]} 
-                      resizeMode="contain"
-                    />
+                    <Svg width="22" height="22" viewBox="0 0 24 24" fill={isFavorite ? "white" : "none"} stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <Path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></Path>
+                    </Svg>
                   </TouchableOpacity>
                 </View>
                 <View style={styles.aestheticConditionWrapper}>
@@ -1137,56 +1195,23 @@ export default function WeatherAppWithLocation() {
                 <Text style={styles.aestheticSectionTitle}>Weather Today</Text>
                 
                 {forecastData && (
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.hourlyScroll}>
-                    {forecastData.slice(0, 5).map((item, index) => {
-                      let iconName = 'sunny';
-                      const condition = item.weather[0].main;
-                      if (condition === 'Clouds') iconName = 'partly-sunny';
-                      else if (condition === 'Rain' || condition === 'Drizzle') iconName = 'rainy';
-                      else if (condition === 'Thunderstorm') iconName = 'thunderstorm';
-                      else if (condition === 'Snow') iconName = 'snow';
-
-                      return (
-                        <View key={index} style={styles.hourlyItem}>
-                          <Icon name={iconName} size={32} color={iconName === 'sunny' ? '#FDB813' : 'rgba(255,255,255,0.8)'} />
-                          <Text style={styles.hourlyTime}>{formatForecastTime(item.dt_txt)}</Text>
-                          <View style={{marginTop: 4, position: 'relative', alignItems: 'center'}}>
-                            <Text style={styles.hourlyTemp}>{Math.round(item.main.temp)}</Text>
-                            <Text style={{fontSize: 10, color: '#ffffff', position: 'absolute', right: -10, top: 0}}>°</Text>
-                          </View>
-                        </View>
-                      );
-                    })}
-                  </ScrollView>
+                  <FlatList
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={styles.hourlyScroll}
+                    data={forecastData.slice(0, 5)}
+                    keyExtractor={(item, index) => index.toString()}
+                    renderItem={({ item }) => <HourlyForecastItem item={item} />}
+                  />
                 )}
 
                 {/* Aesthetic Weekly Trend Moved to Bottom */}
                 {dailyForecast && dailyForecast.length > 0 && (
                   <View style={styles.aestheticWeeklyTrendWrapper}>
                     <Text style={styles.aestheticSectionTitle}>7-Day Forecast</Text>
-                    {dailyForecast.map((item, index) => {
-                      let iconName = 'sunny-outline';
-                      const condition = item.weather.main;
-                      if (condition === 'Clouds') iconName = 'partly-sunny-outline';
-                      else if (condition === 'Rain' || condition === 'Drizzle') iconName = 'rainy-outline';
-                      else if (condition === 'Thunderstorm') iconName = 'thunderstorm-outline';
-                      else if (condition === 'Snow') iconName = 'snow-outline';
-
-                      return (
-                        <View key={index} style={styles.aestheticDailyRow}>
-                          <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
-                            <Text style={styles.aestheticDailyDay}>{getDayName(item.date, index)}</Text>
-                            <Icon name={iconName} size={24} color="#ffffff" style={{ width: 30, textAlign: 'center', marginLeft: 10 }} />
-                            <Text style={styles.aestheticDailyConditionText}>{condition}</Text>
-                          </View>
-
-                          <View style={styles.aestheticDailyTempRange}>
-                            <Text style={styles.aestheticDailyTempMax}>{Math.round(item.max)}°</Text>
-                            <Text style={styles.aestheticDailyTempMin}>{Math.round(item.min)}°</Text>
-                          </View>
-                        </View>
-                      );
-                    })}
+                    {dailyForecast.map((item, index) => (
+                      <DailyForecastItem key={index} item={item} index={index} />
+                    ))}
                   </View>
                 )}
               </View>
@@ -1271,8 +1296,8 @@ export default function WeatherAppWithLocation() {
 
             {/* App Info */}
             <View style={{alignItems: 'center', paddingVertical: 15, opacity: 0.4}}>
-              <Text style={{color: '#fff', fontSize: 11}}>Atmosync v2.0</Text>
-              <Text style={{color: '#fff', fontSize: 10, marginTop: 2}}>Made with ❤️</Text>
+              <Text style={{color: '#fff', fontSize: 11}}>Atmosync v1.0</Text>
+              <Text style={{color: '#fff', fontSize: 10, marginTop: 2}}>Made by Abhishek</Text>
             </View>
           </TouchableOpacity>
         </TouchableOpacity>

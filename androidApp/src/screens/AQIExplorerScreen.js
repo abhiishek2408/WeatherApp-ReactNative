@@ -1,16 +1,17 @@
 import React, { useState, useContext } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, Alert, StyleSheet } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, Alert, StyleSheet, InteractionManager } from 'react-native';
+import { useQuery, useQueries } from '@tanstack/react-query';
+import { useFocusEffect } from '@react-navigation/native';
 import { styles as globalStyles } from '../utils/styles';
 import { globalAqiLocations, translations } from '../utils/constants';
 import { WeatherContext } from '../context/WeatherContext';
 import Icon from 'react-native-vector-icons/Ionicons';
+import { WEATHER_API_KEY } from '@env';
 
 export default function AQIExplorerScreen() {
   const { language } = useContext(WeatherContext);
   const [explorerPath, setExplorerPath] = useState([]); 
-  const [deepDiveData, setDeepDiveData] = useState(null); 
-  const [fetchingDeepDive, setFetchingDeepDive] = useState(false);
-  const [cityAqis, setCityAqis] = useState({});
+  const [deepDiveLocation, setDeepDiveLocation] = useState(null);
 
   const getRepresentativeCoordinates = (node) => {
     if (node.lat !== undefined && node.lon !== undefined) {
@@ -23,48 +24,54 @@ export default function AQIExplorerScreen() {
     return null;
   };
 
-  React.useEffect(() => {
-    let currentData = globalAqiLocations;
-    for (let step of explorerPath) {
-      currentData = currentData[step];
-    }
-    
-    // Fetch representative AQI for all items currently visible in the list
-    Object.keys(currentData).forEach(key => {
-      const coords = getRepresentativeCoordinates(currentData[key]);
-      if (coords) {
-        const apiKey = '9b01d0c4095bf19142e51ddf0896e386';
-        fetch(`https://api.openweathermap.org/data/2.5/air_pollution?lat=${coords.lat}&lon=${coords.lon}&appid=${apiKey}`)
-          .then(res => res.json())
-          .then(data => {
-            if (data.list && data.list.length > 0) {
-              setCityAqis(prev => ({...prev, [key]: data.list[0].main.aqi}));
-            }
-          })
-          .catch(e => console.log('Failed to fetch AQI for', key));
-      }
-    });
-  }, [explorerPath]);
+  let currentData = globalAqiLocations;
+  for (let step of explorerPath) {
+    currentData = currentData[step];
+  }
 
-  const fetchDeepDiveAqi = async (cityName, lat, lon) => {
-    setFetchingDeepDive(true);
-    setDeepDiveData(null);
-    try {
-      const apiKey = '9b01d0c4095bf19142e51ddf0896e386';
-      const aqiUrl = `https://api.openweathermap.org/data/2.5/air_pollution?lat=${lat}&lon=${lon}&appid=${apiKey}`;
-      const res = await fetch(aqiUrl);
+  const queries = Object.keys(currentData).map(key => {
+    const coords = getRepresentativeCoordinates(currentData[key]);
+    return {
+      queryKey: ['aqi', coords?.lat, coords?.lon],
+      queryFn: async () => {
+        if (!coords) return null;
+        const res = await fetch(`https://api.openweathermap.org/data/2.5/air_pollution?lat=${coords.lat}&lon=${coords.lon}&appid=${WEATHER_API_KEY}`);
+        const data = await res.json();
+        return { key, aqi: data.list?.[0]?.main?.aqi };
+      },
+      enabled: !!coords,
+      staleTime: 1000 * 60 * 15,
+    };
+  });
+
+  const aqiResults = useQueries({ queries });
+  const cityAqis = {};
+  aqiResults.forEach(result => {
+    if (result.data?.aqi) {
+      cityAqis[result.data.key] = result.data.aqi;
+    }
+  });
+
+  const { data: deepDiveData, isFetching: fetchingDeepDive, error: deepDiveError } = useQuery({
+    queryKey: ['deepDiveAqi', deepDiveLocation?.lat, deepDiveLocation?.lon],
+    queryFn: async () => {
+      const { lat, lon, cityName } = deepDiveLocation;
+      const res = await fetch(`https://api.openweathermap.org/data/2.5/air_pollution?lat=${lat}&lon=${lon}&appid=${WEATHER_API_KEY}`);
       const data = await res.json();
       if (data.list && data.list.length > 0) {
-        setDeepDiveData({ cityName, ...data.list[0] });
-      } else {
-        Alert.alert('Error', data.message || 'No AQI data found for this location.');
+        return { cityName, ...data.list[0] };
       }
-    } catch (e) {
+      throw new Error('No AQI data found');
+    },
+    enabled: !!deepDiveLocation,
+    staleTime: 1000 * 60 * 15,
+  });
+
+  React.useEffect(() => {
+    if (deepDiveError) {
       Alert.alert('Network Error', 'Failed to fetch detailed AQI. Please check your connection.');
-    } finally {
-      setFetchingDeepDive(false);
     }
-  };
+  }, [deepDiveError]);
 
   const getPollutantDanger = (key, value) => {
     const limits = {
@@ -107,17 +114,17 @@ export default function AQIExplorerScreen() {
       <ScrollView style={{paddingHorizontal: 20, paddingTop: 20}}>
         <Text style={localStyles.mainTitle}>{translations[language].globalAqi}</Text>
         <View style={localStyles.header}>
-          {(explorerPath.length > 0 || deepDiveData) && (
+          {(explorerPath.length > 0 || deepDiveLocation) && (
             <TouchableOpacity 
-              onPress={() => deepDiveData ? setDeepDiveData(null) : setExplorerPath(explorerPath.slice(0, -1))} 
+              onPress={() => deepDiveLocation ? setDeepDiveLocation(null) : setExplorerPath(explorerPath.slice(0, -1))} 
               style={localStyles.backButton}
             >
               <Icon name="arrow-back" size={24} color="#fff" />
             </TouchableOpacity>
           )}
           <Text style={localStyles.headerTitle}>
-            {deepDiveData 
-              ? `${deepDiveData.cityName} AQI` 
+            {deepDiveLocation 
+              ? `${deepDiveLocation.cityName} AQI` 
               : (explorerPath.length === 0 ? translations[language].exploreRegions : explorerPath[explorerPath.length - 1])}
           </Text>
         </View>
@@ -161,10 +168,6 @@ export default function AQIExplorerScreen() {
         ) : (
           <View style={localStyles.explorerList}>
             {(() => {
-              let currentData = globalAqiLocations;
-              for (let step of explorerPath) {
-                currentData = currentData[step];
-              }
               return Object.keys(currentData).map((key, i) => {
                 const isCity = currentData[key].lat !== undefined;
                 return (
@@ -173,7 +176,7 @@ export default function AQIExplorerScreen() {
                     style={localStyles.card}
                     onPress={() => {
                       if (isCity) {
-                        fetchDeepDiveAqi(key, currentData[key].lat, currentData[key].lon);
+                        setDeepDiveLocation({ cityName: key, lat: currentData[key].lat, lon: currentData[key].lon });
                       } else {
                         setExplorerPath([...explorerPath, key]);
                       }
